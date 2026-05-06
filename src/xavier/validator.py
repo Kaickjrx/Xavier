@@ -24,6 +24,14 @@ COUPONS_URL = f"{ML_HOST}/cupons"
 STORAGE_STATE = Path(".playwright-state/storage_state.json")
 
 
+class CaptchaDetected(Exception):
+    """Disparado quando o ML pede captcha; o monitor aborta a rodada."""
+
+
+class LoginRequired(Exception):
+    """Disparado quando a sessão expirou e modo headless não pode logar."""
+
+
 class MercadoLivreValidator:
     """Valida cupons na página Cupons > Inserir cupom do Mercado Livre.
 
@@ -41,26 +49,44 @@ class MercadoLivreValidator:
         throttle_jitter: float = 4.0,
         storage_state_path: Path = STORAGE_STATE,
         coupons_url: str = COUPONS_URL,
+        max_dead_per_source: int = 5,
     ) -> None:
         self.headless = headless
         self.throttle_seconds = throttle_seconds
         self.throttle_jitter = throttle_jitter
         self.storage_state_path = storage_state_path
         self.coupons_url = coupons_url
+        self.max_dead_per_source = max_dead_per_source
 
     async def validate_all(self, coupons: list[Coupon]) -> list[ValidationResult]:
         results: list[ValidationResult] = []
+        # Contagem de inválidos/expirados por fonte → abandono após N falhas.
+        dead_per_source: dict[str, int] = {}
+        abandoned: set[str] = set()
+
         async with async_playwright() as pw:
             context = await self._open_context(pw)
             page = await context.new_page()
 
             try:
-                await self._ensure_logged_in(page)
+                login_state = await self._ensure_logged_in(page)
+                if login_state == "captcha":
+                    raise CaptchaDetected("Captcha na página de cupons do ML.")
+                if login_state == "needs_login":
+                    raise LoginRequired("Sessão deslogada — login manual necessário.")
 
                 for i, coupon in enumerate(coupons, start=1):
-                    log.info("[%d/%d] validando %s", i, len(coupons), coupon.code)
+                    if coupon.source in abandoned:
+                        log.info("[%d/%d] pulando %s (fonte %s abandonada nesta rodada)",
+                                 i, len(coupons), coupon.code, coupon.source)
+                        continue
+
+                    log.info("[%d/%d] validando %s (fonte=%s)",
+                             i, len(coupons), coupon.code, coupon.source)
                     try:
                         result = await self._apply_coupon(page, coupon)
+                    except CaptchaDetected:
+                        raise
                     except Exception as exc:
                         log.exception("erro ao validar %s", coupon.code)
                         result = ValidationResult(
@@ -70,6 +96,13 @@ class MercadoLivreValidator:
                         )
                     results.append(result)
                     log.info("  → %s (%s)", result.status.value, result.message or "")
+
+                    if result.status in (CouponStatus.EXPIRED, CouponStatus.INVALID):
+                        dead_per_source[coupon.source] = dead_per_source.get(coupon.source, 0) + 1
+                        if dead_per_source[coupon.source] >= self.max_dead_per_source:
+                            log.warning("abandonando fonte %s após %d falhas",
+                                        coupon.source, dead_per_source[coupon.source])
+                            abandoned.add(coupon.source)
 
                     if i < len(coupons):
                         await self._sleep_with_jitter()
@@ -94,16 +127,39 @@ class MercadoLivreValidator:
             self.storage_state_path.parent.mkdir(parents=True, exist_ok=True)
         return await browser.new_context(**kwargs)
 
-    async def _ensure_logged_in(self, page: Page) -> None:
+    async def _ensure_logged_in(self, page: Page) -> str:
+        """Retorna 'ok' | 'needs_login' | 'captcha'.
+
+        Em modo interativo (não-headless) tenta login manual.
+        Em modo headless, devolve 'needs_login' sem prompt.
+        """
         await page.goto(self.coupons_url, wait_until="domcontentloaded")
-        # Se redirecionar para tela de login, pede login interativo.
+        if await self._has_captcha(page):
+            return "captcha"
+
         if "registration" in page.url or "login" in page.url:
+            if self.headless:
+                return "needs_login"
             print(
                 "\n⚠ Faça login no Mercado Livre na janela aberta. "
                 "Depois de logado, pressione Enter aqui para continuar."
             )
             await asyncio.get_event_loop().run_in_executor(None, input)
             await page.goto(self.coupons_url, wait_until="domcontentloaded")
+            if "registration" in page.url or "login" in page.url:
+                return "needs_login"
+            if await self._has_captcha(page):
+                return "captcha"
+        return "ok"
+
+    @staticmethod
+    async def _has_captcha(page: Page) -> bool:
+        html = (await page.content()).lower()
+        return (
+            "captcha" in html
+            or "verifique que você é humano" in html
+            or "/security-challenge" in page.url
+        )
 
     async def _apply_coupon(self, page: Page, coupon: Coupon) -> ValidationResult:
         # Sempre recarrega a página de cupons antes de cada tentativa para garantir

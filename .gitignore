@@ -29,3 +29,7 @@ storage_state.json
 coupons.json
 results.json
 *.log
+
+# Estado local do monitor (não commitar — contém histórico do usuário)
+state/
+

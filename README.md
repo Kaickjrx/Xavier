@@ -56,6 +56,71 @@ Cada cupom é postado no webhook como uma linha:
 CODIGO | DESCRIÇÃO | Status
 ```
 
+## Modo monitor (fluxo automático)
+
+`xavier monitor` é o ciclo idempotente baseado no spec do feedback memory:
+
+1. Lê `https://www.mercadolivre.com.br/cupons/active` (sessão logada via Playwright)
+2. Faz diff vs `state/ml-cupons-state.json`: NEWLY_ACTIVE, NEWLY_EXPIRED
+3. Coleta candidatos de fontes externas em ordem de prioridade:
+   AdoroCupom → ValePlus → Promobit → Méliuz → Cuponomia → CupomValido
+   (cupons com badge "verificado há +3 dias" ou "expirado" são descartados)
+4. Testa cada candidato no modal de cupom do ML, com 8s + jitter entre tentativas.
+   Abandona uma fonte após 5 cupons inválidos/expirados na mesma rodada.
+5. Re-lê `/cupons/active` pra confirmar quem realmente entrou (modal limpo ≠ aceito).
+6. Se houve mudança, dispara **2 webhooks** (mensagens separadas) no Google Chat:
+
+   **Webhook 2** (lista):
+   ```
+   CUPONS ativos:
+   COD1 | COD2 | COD3
+   São N novos.
+
+   CUPONS expirados:
+   COD_X | COD_Y
+   ```
+
+   **Webhook 3** (detalhado):
+   ```
+   *FRASE EM CAIXA ALTA* 🚀
+
+   🎟️ *COD1* - descrição
+   🎟️ *COD2* - descrição - (NOVO)
+
+   Ative o cupom no link pelo app: https://meli.la/25EE8mV
+
+   🔗 Convide um amigo(a) para o grupo: https://chat.whatsapp.com/...
+   ```
+
+7. Atualiza `state/ml-cupons-state.json` (active, announced_codes,
+   tested_dead_count, recent_phrases, last_run).
+8. Se não houve mudança: rodada silenciosa, só `last_run` é atualizado.
+
+### Banco de frases
+
+Edite `phrases.json` (raiz do repo) com a lista de frases que rotacionam na
+linha 1 do Webhook 3. O monitor evita repetir as 6 últimas usadas
+(salvas em `state.recent_phrases`).
+
+### Falhas
+
+Em qualquer falha (browser indisponível, sessão expirada, captcha) o monitor
+dispara **um único webhook curto** `[ml-cupons-monitor] Falha: <motivo>`
+e aborta. Idempotência garantida — rodar 2x sem mudança não duplica nada.
+
+### Comandos auxiliares
+
+```bash
+xavier state-show          # imprime o state atual
+xavier test-webhook        # ping rápido no Google Chat
+```
+
+### Agendar (cron)
+
+```cron
+*/30 * * * * cd /caminho/Xavier && /caminho/Xavier/.venv/bin/xavier monitor --webhook "$XAVIER_WEBHOOK_URL" >> monitor.log 2>&1
+```
+
 ## Estrutura
 
 ```

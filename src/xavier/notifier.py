@@ -37,6 +37,63 @@ def format_summary(results: Iterable[ValidationResult]) -> str:
     return "\n".join(format_line(r) for r in results)
 
 
+# ───────── Formato dos webhooks do monitor ─────────
+
+FOOTER = (
+    "Ative o cupom no link pelo app: https://meli.la/25EE8mV\n\n"
+    "🔗 Convide um amigo(a) para o grupo: "
+    "https://chat.whatsapp.com/IfUMKqvZBee1CkPUtR89nd"
+)
+
+
+def format_webhook_list(
+    *,
+    active_codes: list[str],
+    newly_active: list[str],
+    newly_expired: list[str],
+) -> str:
+    """Webhook 2 — formato lista."""
+    parts: list[str] = ["CUPONS ativos:"]
+    parts.append(" | ".join(active_codes) if active_codes else "(nenhum)")
+    if newly_active:
+        n = len(newly_active)
+        parts.append(f"São {n} novo{'s' if n != 1 else ''}.")
+    if newly_expired:
+        parts.append("")
+        parts.append("CUPONS expirados:")
+        parts.append(" | ".join(newly_expired))
+    return "\n".join(parts)
+
+
+def format_webhook_detailed(
+    *,
+    opener_phrase: str,
+    active_with_desc: list[tuple[str, str | None]],
+    announced_codes: set[str],
+) -> str:
+    """Webhook 3 — formato detalhado.
+
+    active_with_desc: [(code, description_or_None), ...] na ordem que devem aparecer.
+    announced_codes: códigos já anunciados antes (não recebem marcador NOVO).
+    """
+    lines: list[str] = [opener_phrase, ""]
+    for code, desc in active_with_desc:
+        desc_text = (desc or "").strip() or "—"
+        marker = "" if code in announced_codes else " - (NOVO)"
+        lines.append(f"🎟️ *{code}* - {desc_text}{marker}")
+    lines.append("")
+    lines.append(FOOTER)
+    return "\n".join(lines)
+
+
+def post(url: str, text: str, timeout: float = 10.0) -> int:
+    """Posta `{"text": ...}` em um webhook (Google Chat compatível). Retorna status."""
+    log.info("POST webhook (%d chars)", len(text))
+    resp = httpx.post(url, json={"text": text}, timeout=timeout)
+    resp.raise_for_status()
+    return resp.status_code
+
+
 def send_webhook(
     url: str,
     results: list[ValidationResult],

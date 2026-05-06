@@ -22,6 +22,8 @@ COUPON_CODE_RE = re.compile(r"\b[A-Z0-9]{4,20}\b")
 class Scraper(ABC):
     name: str
     base_url: str
+    # Quanto menor, maior prioridade (1 = melhor fonte).
+    priority: int = 99
 
     def __init__(self, client: httpx.Client | None = None, timeout: float = 15.0) -> None:
         self._client = client or httpx.Client(
@@ -58,3 +60,43 @@ def looks_like_coupon_code(text: str) -> bool:
     # Tem que ter ao menos 1 dígito OU mistura visível, evitando palavras tipo "OFERTA"
     has_digit = any(ch.isdigit() for ch in text)
     return has_digit or len(text) >= 6
+
+
+# Marcadores que indicam que o cupom ainda está fresco na fonte.
+FRESH_MARKERS = (
+    "verificado hoje",
+    "atualizado hoje",
+    "validado hoje",
+    "há poucos minutos",
+    "há minutos",
+    "há 1 hora",
+    "há 2 horas",
+    "há algumas horas",
+)
+# Marcadores que indicam fonte velha — descarta.
+STALE_MARKERS = (
+    "verificado há 3 dias",
+    "verificado há 4 dias",
+    "verificado há 5 dias",
+    "verificado há 6 dias",
+    "verificado há 7 dias",
+    "verificado há 1 semana",
+    "verificado há 2 semanas",
+    "expirado",
+    "vencido",
+    "cupom expirado",
+)
+
+
+def is_fresh(card_text: str) -> bool:
+    """Heurística para regra anti-desperdício do feedback memory.
+
+    Aceita se houver marcador de fresco. Rejeita se houver marcador de stale.
+    Na ausência dos dois, aceita por default (a validação no ML é a fonte da verdade).
+    """
+    lower = card_text.lower()
+    if any(m in lower for m in STALE_MARKERS):
+        return False
+    if any(m in lower for m in FRESH_MARKERS):
+        return True
+    return True

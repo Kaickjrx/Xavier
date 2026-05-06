@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 from .base import Scraper
-from .cuponomia import CuponomiaScraper
+from .adorocupom import AdoroCupomScraper
 from .cupomvalido import CupomValidoScraper
+from .cuponomia import CuponomiaScraper
+from .meliuz import MeliuzScraper
+from .promobit import PromobitScraper
+from .valeplus import ValePlusScraper
 
-ALL_SCRAPERS: list[type[Scraper]] = [CuponomiaScraper, CupomValidoScraper]
+# Ordem de prioridade vinda do feedback memory.
+ALL_SCRAPERS: list[type[Scraper]] = [
+    AdoroCupomScraper,
+    ValePlusScraper,
+    PromobitScraper,
+    MeliuzScraper,
+    CuponomiaScraper,
+    CupomValidoScraper,
+]
 
-__all__ = ["Scraper", "CuponomiaScraper", "CupomValidoScraper", "ALL_SCRAPERS"]
+__all__ = [
+    "Scraper",
+    "AdoroCupomScraper",
+    "CupomValidoScraper",
+    "CuponomiaScraper",
+    "MeliuzScraper",
+    "PromobitScraper",
+    "ValePlusScraper",
+    "ALL_SCRAPERS",
+]

@@ -11,8 +11,10 @@ from rich.logging import RichHandler
 from rich.table import Table
 
 from .models import Coupon, ValidationResult
+from .monitor import run_monitor_sync
 from .notifier import STATUS_LABELS_PT, format_summary, send_webhook
 from .scrapers import ALL_SCRAPERS
+from .state import DEFAULT_STATE_PATH, load_state
 from .storage import deduplicate, load_coupons, save_coupons, save_results
 from .validator import MercadoLivreValidator
 
@@ -161,6 +163,50 @@ def run(output: Path, coupons_out: Path, headless: bool, throttle: float,
     else:
         console.print("\n[dim]Sem webhook (defina XAVIER_WEBHOOK_URL ou use --webhook). Resumo:[/]")
         console.print(format_summary(results))
+
+
+@cli.command()
+@click.option("--webhook", envvar="XAVIER_WEBHOOK_URL", required=True,
+              help="URL do webhook Google Chat (env XAVIER_WEBHOOK_URL)")
+@click.option("--state", "state_path",
+              type=click.Path(dir_okay=False, path_type=Path),
+              default=DEFAULT_STATE_PATH, show_default=True)
+@click.option("--phrases", "phrases_path",
+              type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              default=Path("phrases.json"), show_default=True)
+@click.option("--headless/--headed", default=True, show_default=True)
+@click.option("--throttle", type=float, default=8.0, show_default=True,
+              help="Segundos entre validações no ML")
+@click.option("--max-candidates", type=int, default=10, show_default=True)
+def monitor(webhook: str, state_path: Path, phrases_path: Path, headless: bool,
+            throttle: float, max_candidates: int) -> None:
+    """Roda 1 ciclo do monitor: lê /cupons/active, busca novos, testa, notifica.
+
+    Idempotente: sem mudança = sem webhook.
+    """
+    result = run_monitor_sync(
+        webhook_url=webhook,
+        state_path=state_path,
+        phrases_path=phrases_path,
+        headless=headless,
+        throttle_seconds=throttle,
+        max_candidates=max_candidates,
+    )
+    console.log(result.summary)
+    if result.sent_webhooks:
+        console.log("[green]✓[/] webhooks enviados")
+    else:
+        console.log("[dim]sem mudança — rodada silenciosa[/]")
+
+
+@cli.command(name="state-show")
+@click.option("--state", "state_path",
+              type=click.Path(dir_okay=False, path_type=Path),
+              default=DEFAULT_STATE_PATH, show_default=True)
+def state_show(state_path: Path) -> None:
+    """Imprime o estado atual do monitor."""
+    s = load_state(state_path)
+    console.print_json(data=s.model_dump(mode="json"))
 
 
 @cli.command(name="test-webhook")
