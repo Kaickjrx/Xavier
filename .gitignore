@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+.venv/
+venv/
+env/
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Sessão persistida do Playwright (contém cookies de login do ML)
+.playwright-state/
+storage_state.json
+
+# Saídas
+coupons.json
+results.json
+*.log
