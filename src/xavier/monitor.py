@@ -7,6 +7,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
+from .config import get_settings
 from .ml_active import PageReadResult, read_active_coupons
 from .models import Coupon, CouponStatus, ValidationResult
 from .notifier import (
@@ -62,8 +63,9 @@ async def run_monitor(
     """
     state = load_state(state_path)
     phrases = load_phrases(phrases_path)
+    settings = get_settings()
 
-    # ───── 1. Ler /cupons/active ─────
+    # ───── 1. Ler /cupons/active (com auto-login se houver credenciais) ─────
     try:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=headless)
@@ -73,10 +75,10 @@ async def run_monitor(
             ctx = await browser.new_context(**ctx_kwargs)
             page = await ctx.new_page()
             try:
-                read = await read_active_coupons(page)
+                read = await read_active_coupons(page, settings=settings)
             finally:
-                if storage_state_path.exists():
-                    await ctx.storage_state(path=str(storage_state_path))
+                storage_state_path.parent.mkdir(parents=True, exist_ok=True)
+                await ctx.storage_state(path=str(storage_state_path))
                 await ctx.close()
                 await browser.close()
     except Exception as exc:
@@ -86,8 +88,14 @@ async def run_monitor(
     if read.has_captcha:
         _send_error(webhook_url, "captcha em /cupons/active. Resolver manualmente.")
         raise CaptchaDetected()
+    if read.two_factor:
+        _send_error(webhook_url, "ML pediu 2FA — resolver manualmente.")
+        raise LoginRequired()
+    if read.bad_credentials:
+        _send_error(webhook_url, "credenciais inválidas (XAVIER_ML_EMAIL/PASSWORD).")
+        raise LoginRequired()
     if read.needs_login:
-        _send_error(webhook_url, "sessão deslogada — login manual necessário.")
+        _send_error(webhook_url, "sessão deslogada e sem credenciais para auto-login.")
         raise LoginRequired()
 
     current_active = read.coupons
@@ -140,7 +148,7 @@ async def run_monitor(
             )
             page = await ctx.new_page()
             try:
-                reread = await read_active_coupons(page)
+                reread = await read_active_coupons(page, settings=settings)
             finally:
                 await ctx.close()
                 await browser.close()

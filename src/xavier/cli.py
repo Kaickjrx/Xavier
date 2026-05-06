@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 
+from .config import load_env
 from .models import Coupon, ValidationResult
 from .monitor import run_monitor_sync
 from .notifier import STATUS_LABELS_PT, format_summary, send_webhook
@@ -72,6 +73,7 @@ def _print_results(results: list[ValidationResult]) -> None:
 def cli(verbose: bool) -> None:
     """Xavier — extrai e valida cupons do Mercado Livre."""
     _setup_logging(verbose)
+    load_env()
 
 
 @cli.command()
@@ -197,6 +199,44 @@ def monitor(webhook: str, state_path: Path, phrases_path: Path, headless: bool,
         console.log("[green]✓[/] webhooks enviados")
     else:
         console.log("[dim]sem mudança — rodada silenciosa[/]")
+
+
+@cli.command()
+def login() -> None:
+    """Abre o Chromium em modo headed pra você logar no ML uma vez.
+
+    Use isso quando o auto-login falhar por captcha ou 2FA. A sessão
+    é salva em .playwright-state/ e o `xavier monitor` passa a usar.
+    """
+    import asyncio as _asyncio
+
+    from playwright.async_api import async_playwright as _apw
+
+    from .validator import STORAGE_STATE
+
+    async def _go():
+        STORAGE_STATE.parent.mkdir(parents=True, exist_ok=True)
+        async with _apw() as pw:
+            browser = await pw.chromium.launch(headless=False)
+            ctx = await browser.new_context(
+                locale="pt-BR",
+                storage_state=str(STORAGE_STATE) if STORAGE_STATE.exists() else None,
+            )
+            page = await ctx.new_page()
+            await page.goto("https://www.mercadolivre.com.br/")
+            console.log(
+                "[yellow]Faça login na janela aberta. Quando terminar, "
+                "feche o navegador (X) que a sessão será salva.[/]"
+            )
+            try:
+                await page.wait_for_event("close", timeout=0)
+            except Exception:
+                pass
+            await ctx.storage_state(path=str(STORAGE_STATE))
+            await browser.close()
+        console.log(f"[green]✓[/] sessão salva em {STORAGE_STATE}")
+
+    _asyncio.run(_go())
 
 
 @cli.command(name="state-show")

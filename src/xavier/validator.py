@@ -14,6 +14,8 @@ from playwright.async_api import (
     async_playwright,
 )
 
+from .auth import LoginOutcome, attempt_ml_login
+from .config import get_settings
 from .models import Coupon, CouponStatus, ValidationResult
 
 log = logging.getLogger(__name__)
@@ -73,7 +75,11 @@ class MercadoLivreValidator:
                 if login_state == "captcha":
                     raise CaptchaDetected("Captcha na página de cupons do ML.")
                 if login_state == "needs_login":
-                    raise LoginRequired("Sessão deslogada — login manual necessário.")
+                    raise LoginRequired("Sessão deslogada e sem credenciais (XAVIER_ML_EMAIL/PASSWORD).")
+                if login_state == "two_factor":
+                    raise LoginRequired("ML pediu 2FA — resolver manualmente.")
+                if login_state == "bad_credentials":
+                    raise LoginRequired("Credenciais inválidas (XAVIER_ML_EMAIL/PASSWORD).")
 
                 for i, coupon in enumerate(coupons, start=1):
                     if coupon.source in abandoned:
@@ -128,29 +134,37 @@ class MercadoLivreValidator:
         return await browser.new_context(**kwargs)
 
     async def _ensure_logged_in(self, page: Page) -> str:
-        """Retorna 'ok' | 'needs_login' | 'captcha'.
+        """Retorna 'ok' | 'needs_login' | 'captcha' | 'two_factor' | 'bad_credentials'.
 
-        Em modo interativo (não-headless) tenta login manual.
-        Em modo headless, devolve 'needs_login' sem prompt.
+        Tenta primeiro carregar a página de cupons com a sessão salva. Se cair
+        em login, tenta autenticar via XAVIER_ML_EMAIL / XAVIER_ML_PASSWORD
+        (auth.py). Se faltar credencial OU bater captcha/2FA, devolve o estado
+        e o monitor lida (manda webhook avisando).
         """
         await page.goto(self.coupons_url, wait_until="domcontentloaded")
         if await self._has_captcha(page):
             return "captcha"
+        if "registration" not in page.url and "login" not in page.url:
+            return "ok"
 
-        if "registration" in page.url or "login" in page.url:
-            if self.headless:
-                return "needs_login"
-            print(
-                "\n⚠ Faça login no Mercado Livre na janela aberta. "
-                "Depois de logado, pressione Enter aqui para continuar."
-            )
-            await asyncio.get_event_loop().run_in_executor(None, input)
+        # Sessão expirada — tenta login programático.
+        settings = get_settings()
+        if not settings.has_ml_credentials:
+            return "needs_login"
+
+        outcome = await attempt_ml_login(page, settings.ml_email, settings.ml_password)
+        if outcome == LoginOutcome.CAPTCHA:
+            return "captcha"
+        if outcome == LoginOutcome.TWO_FACTOR:
+            return "two_factor"
+        if outcome == LoginOutcome.INVALID_CREDENTIALS:
+            return "bad_credentials"
+        if outcome in (LoginOutcome.SUCCESS, LoginOutcome.ALREADY_LOGGED_IN):
             await page.goto(self.coupons_url, wait_until="domcontentloaded")
-            if "registration" in page.url or "login" in page.url:
-                return "needs_login"
             if await self._has_captcha(page):
                 return "captcha"
-        return "ok"
+            return "ok" if "login" not in page.url else "needs_login"
+        return "needs_login"
 
     @staticmethod
     async def _has_captcha(page: Page) -> bool:

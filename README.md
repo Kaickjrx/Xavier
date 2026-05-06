@@ -21,18 +21,43 @@ pip install -e .
 playwright install chromium
 ```
 
-## Configuração do webhook
+## Configuração
 
-O resultado pode ser postado em um webhook (ex.: Google Chat, Slack incoming).
-Configure a URL via variável de ambiente — **nunca commite a URL**, ela contém
-uma chave/token de escrita.
+Copie o `.env.example` para `.env` (gitignored) e preencha:
 
 ```bash
 cp .env.example .env
-# edite .env e preencha XAVIER_WEBHOOK_URL=https://...
-export $(grep -v '^#' .env | xargs)
-xavier test-webhook   # ping rápido pra validar
 ```
+
+```ini
+XAVIER_WEBHOOK_URL=https://chat.googleapis.com/...
+XAVIER_ML_EMAIL=seu.email@dominio.com
+XAVIER_ML_PASSWORD=sua-senha
+```
+
+A CLI carrega o `.env` automaticamente (via `python-dotenv`) — não precisa
+`export`. **Nunca commite o `.env`**: contém o webhook (chave/token) e a senha
+do ML. O `.gitignore` já protege.
+
+### Login no Mercado Livre
+
+O monitor tenta logar **automaticamente** com `XAVIER_ML_EMAIL` /
+`XAVIER_ML_PASSWORD` quando a sessão expira. Em dois cenários o auto-login
+falha por design (proteção do ML):
+
+- **Captcha** → o monitor manda webhook `[ml-cupons-monitor] Falha: captcha…`
+  e aborta. Resolva manualmente com `xavier login` (abre janela headed).
+- **2FA / verificação por SMS** → idem. Use `xavier login` uma vez para
+  passar pelo desafio; a sessão fica salva em `.playwright-state/` e o
+  monitor volta a rodar headless.
+
+```bash
+xavier login        # uma vez (ou quando der captcha/2FA)
+xavier test-webhook # ping de sanidade no Google Chat
+```
+
+A senha **nunca** é logada — o código mascara o e-mail (`k****x@...`) e nunca
+imprime a senha em stdout/stderr ou no state.
 
 ## Uso
 

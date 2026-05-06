@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
+from .auth import LoginOutcome, attempt_ml_login
+from .config import Settings
 from .state import CouponSnapshot
 
 log = logging.getLogger(__name__)
@@ -26,6 +28,8 @@ class PageReadResult:
     coupons: list[CouponSnapshot]
     needs_login: bool = False
     has_captcha: bool = False
+    two_factor: bool = False
+    bad_credentials: bool = False
 
 
 def _is_seller_code(text: str) -> bool:
@@ -42,8 +46,11 @@ def _looks_like_code(text: str) -> bool:
     return has_digit or len(t) >= 6
 
 
-async def read_active_coupons(page: Page) -> PageReadResult:
+async def read_active_coupons(page: Page, settings: Settings | None = None) -> PageReadResult:
     """Navega para /cupons/active e devolve a lista de cupons ativos.
+
+    Se a sessão estiver deslogada e `settings` tiver credenciais,
+    tenta login automático via auth.attempt_ml_login.
 
     Não tenta extrair seletores específicos do DOM (que mudam) — varre o texto
     visível em busca de tokens que pareçam código de cupom + descrição próxima.
@@ -55,12 +62,30 @@ async def read_active_coupons(page: Page) -> PageReadResult:
     except PlaywrightTimeout:
         log.warning("timeout navegando para %s", ACTIVE_URL)
 
-    if "registration" in page.url or "login" in page.url:
-        return PageReadResult(coupons=[], needs_login=True)
-
-    content = await page.content()
-    if "captcha" in content.lower() or "verifique que você é humano" in content.lower():
+    content = (await page.content()).lower()
+    if "captcha" in content or "verifique que você é humano" in content:
         return PageReadResult(coupons=[], has_captcha=True)
+
+    if "registration" in page.url or "login" in page.url:
+        if settings and settings.has_ml_credentials:
+            outcome = await attempt_ml_login(page, settings.ml_email, settings.ml_password)
+            if outcome == LoginOutcome.CAPTCHA:
+                return PageReadResult(coupons=[], has_captcha=True)
+            if outcome == LoginOutcome.TWO_FACTOR:
+                return PageReadResult(coupons=[], two_factor=True)
+            if outcome == LoginOutcome.INVALID_CREDENTIALS:
+                return PageReadResult(coupons=[], bad_credentials=True)
+            if outcome in (LoginOutcome.SUCCESS, LoginOutcome.ALREADY_LOGGED_IN):
+                try:
+                    await page.goto(ACTIVE_URL, wait_until="domcontentloaded", timeout=20000)
+                except PlaywrightTimeout:
+                    pass
+                if "registration" in page.url or "login" in page.url:
+                    return PageReadResult(coupons=[], needs_login=True)
+            else:
+                return PageReadResult(coupons=[], needs_login=True)
+        else:
+            return PageReadResult(coupons=[], needs_login=True)
 
     text = await page.evaluate("() => document.body.innerText")
     return PageReadResult(coupons=_parse_active_text(text))
