@@ -22,6 +22,9 @@ htmlcov/
 .playwright-state/
 storage_state.json
 
+# Segredos
+.env
+
 # Saídas
 coupons.json
 results.json

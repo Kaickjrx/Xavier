@@ -21,6 +21,19 @@ pip install -e .
 playwright install chromium
 ```
 
+## Configuração do webhook
+
+O resultado pode ser postado em um webhook (ex.: Google Chat, Slack incoming).
+Configure a URL via variável de ambiente — **nunca commite a URL**, ela contém
+uma chave/token de escrita.
+
+```bash
+cp .env.example .env
+# edite .env e preencha XAVIER_WEBHOOK_URL=https://...
+export $(grep -v '^#' .env | xargs)
+xavier test-webhook   # ping rápido pra validar
+```
+
 ## Uso
 
 ```bash
@@ -30,8 +43,17 @@ xavier scrape --output coupons.json
 # 2. Validar os cupons no Mercado Livre (abre navegador, pede login na 1ª vez)
 xavier validate coupons.json --output results.json
 
-# 3. Pipeline completo (scrape + validate)
+# 3. Pipeline completo (scrape + validate + webhook)
 xavier run --output results.json
+
+# 4. Pré-visualizar formato do webhook sem enviar
+xavier format-preview results.json
+```
+
+Cada cupom é postado no webhook como uma linha:
+
+```
+CODIGO | DESCRIÇÃO | Status
 ```
 
 ## Estrutura

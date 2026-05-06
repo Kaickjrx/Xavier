@@ -163,6 +163,20 @@ def run(output: Path, coupons_out: Path, headless: bool, throttle: float,
         console.print(format_summary(results))
 
 
+@cli.command(name="test-webhook")
+@click.option("--webhook", envvar="XAVIER_WEBHOOK_URL", required=True,
+              help="URL do webhook (default: env XAVIER_WEBHOOK_URL)")
+def test_webhook(webhook: str) -> None:
+    """Posta uma mensagem curta no webhook para validar a conexão."""
+    import httpx
+    payload = {"text": "Xavier — teste de webhook ✅"}
+    resp = httpx.post(webhook, json=payload, timeout=10)
+    if resp.status_code < 300:
+        console.log(f"[green]✓[/] webhook OK ({resp.status_code})")
+    else:
+        console.log(f"[red]✗[/] webhook respondeu {resp.status_code}: {resp.text[:200]}")
+
+
 @cli.command(name="format-preview")
 @click.argument("results_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 def format_preview(results_file: Path) -> None:
